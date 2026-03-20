@@ -10,7 +10,7 @@ from flask import Flask, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, ContextTypes,
-    CallbackQueryHandler, MessageHandler, filters
+    CallbackQueryHandler
 )
 from telegram.constants import ParseMode
 from dotenv import load_dotenv
@@ -21,11 +21,10 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8681415760:AAFPFcK8P56CFyxOulWr69I0QLyYGwx-f1s")
 API_URL = "https://num-api-nu.vercel.app/get-info?phone={num}&apikey=boss10m"
 
-# Multiple force join channels
+# Force join channels (PUBLIC)
 FORCE_CHANNELS = [
-    {"username": "@backup_enc", "url": "https://t.me/+gnyODeNwEwNjZDJl"},
-    {"username": "@backup4_enc", "url": "https://t.me/+oirjMZaVI543M2Y1"},
-    {"username": "@esxcrows", "url": "https://t.me/esxcrows"}
+    {"username": "@esxcrows", "url": "https://t.me/esxcrows"},
+    {"username": "@ceviety", "url": "https://t.me/ceviety"}
 ]
 
 # Flask keep-alive
@@ -92,6 +91,7 @@ class UserDB:
             if channel not in self.users[uid].get("verified_channels", []):
                 self.users[uid].setdefault("verified_channels", []).append(channel)
                 self._save()
+            # Check if all channels are verified
             all_verified = all(ch["username"] in self.users[uid]["verified_channels"] for ch in FORCE_CHANNELS)
             self.users[uid]["verified"] = all_verified
             self._save()
@@ -103,6 +103,7 @@ db = UserDB()
 
 # ============== Force Join Check ==============
 async def check_force_join(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Check if user has joined ALL required channels"""
     user_data = db.get_user(user_id)
     if user_data.get("verified", False):
         return True
@@ -112,27 +113,35 @@ async def check_force_join(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> 
 
     for channel in FORCE_CHANNELS:
         channel_username = channel["username"]
+        
+        # Skip if already verified
         if channel_username in user_data.get("verified_channels", []):
             continue
 
         try:
             member = await context.bot.get_chat_member(chat_id=channel_username, user_id=user_id)
+            
             if member.status in ["member", "administrator", "creator"]:
                 db.add_verified_channel(user_id, channel_username)
                 newly_verified = True
+                logger.info(f"✅ User {user_id} joined {channel_username}")
             else:
                 all_joined = False
+                logger.info(f"❌ User {user_id} not in {channel_username}")
+                
         except Exception as e:
-            logger.warning(f"Force join check error for {channel_username}: {e}")
+            logger.error(f"Error checking {channel_username}: {e}")
             all_joined = False
 
     if newly_verified and all_joined:
         db.update_user(user_id, verified=True)
+        logger.info(f"✅ User {user_id} fully verified")
 
     return all_joined
 
 
 async def send_force_join_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send force join message with all channels"""
     keyboard = []
     for ch in FORCE_CHANNELS:
         keyboard.append([InlineKeyboardButton(f"📢 Join {ch['username']}", url=ch["url"])])
@@ -166,27 +175,16 @@ To use this bot, you must join all these channels:
 
 
 # ============== ANIMATION FUNCTIONS ==============
-async def show_loading_animation(message, text: str, duration: float = 0.5):
+async def show_loading_animation(message, text: str, duration: float = 0.8):
     """Show professional loading animation"""
-    frames = [
-        "🔍",
-        "🔍.",
-        "🔍..",
-        "🔍...",
-        "⏳",
-        "⏳.",
-        "⏳..",
-        "⏳...",
-        "⚙️",
-        "⚙️.",
-        "⚙️..",
-        "⚙️...",
-        "✅"
-    ]
+    frames = ["🔍", "🔍.", "🔍..", "🔍...", "⏳", "⏳.", "⏳..", "⏳...", "⚙️", "⚙️.", "⚙️..", "⚙️...", "✅"]
     
     for frame in frames:
-        await message.edit_text(f"{frame} {text}")
-        await asyncio.sleep(duration / len(frames))
+        try:
+            await message.edit_text(f"{frame} {text}")
+            await asyncio.sleep(duration / len(frames))
+        except:
+            pass
     
     return message
 
@@ -199,11 +197,14 @@ async def show_progress_animation(message, current: int, total: int):
     bar = "█" * filled + "░" * (bar_length - filled)
     
     text = f"🔄 Fetching data [{bar}] {percent}%"
-    await message.edit_text(text)
+    try:
+        await message.edit_text(text)
+    except:
+        pass
     await asyncio.sleep(0.05)
 
 
-async def delete_with_animation(message, delay: float = 0.5):
+async def delete_with_animation(message, delay: float = 0.6):
     """Delete message with countdown animation"""
     if not message:
         return
@@ -270,7 +271,7 @@ async def num_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await delete_with_animation(msg)
         return
 
-    # Delete user command with animation
+    # Delete user command
     await delete_with_animation(update.message)
 
     # Show loading animation
@@ -280,7 +281,7 @@ async def num_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_loading_animation(loading_msg, "Fetching number details")
     
     try:
-        # Frame 2: API Call with progress
+        # API Call with progress
         await loading_msg.edit_text("⚙️ Connecting to server...")
         
         r = requests.get(API_URL.format(num=phone), timeout=15, headers={"User-Agent": "Mozilla/5.0"})
@@ -349,7 +350,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("🔄 Verifying channel membership...")
 
         if await check_force_join(user.id, context):
-            await query.edit_message_text("✅ <b>Verification successful!</b>\n\nUse <code>/num</code> command.", parse_mode=ParseMode.HTML)
+            await query.edit_message_text(
+                "✅ <b>Verification successful!</b>\n\nUse <code>/num</code> command.",
+                parse_mode=ParseMode.HTML
+            )
         else:
             user_data = db.get_user(user.id)
             missing = []
@@ -358,8 +362,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     missing.append(ch["username"])
 
             if missing:
-                text = f"❌ <b>Still missing:</b> {', '.join(missing)}\n\nPlease join all channels and try again."
-                await query.edit_message_text(text, parse_mode=ParseMode.HTML)
+                # Re-show join buttons with missing channels
+                keyboard = []
+                for ch in FORCE_CHANNELS:
+                    if ch["username"] in missing:
+                        keyboard.append([InlineKeyboardButton(f"📢 Join {ch['username']}", url=ch["url"])])
+                keyboard.append([InlineKeyboardButton("🔄 Verify Again", callback_data="verify_join")])
+                
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                text = f"❌ <b>Missing channels:</b>\n" + "\n".join(missing) + "\n\nPlease join and click verify."
+                await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
             else:
                 await query.edit_message_text("❌ Verification failed. Please join all channels and try again.")
 
@@ -395,7 +408,7 @@ def main():
     application.add_handler(CommandHandler("num", num_lookup))
     application.add_handler(CallbackQueryHandler(button_callback))
 
-    logger.info("🤖 Bot running | Professional animations | Auto-delete | Multi-channel force join")
+    logger.info("🤖 Bot running | Public channels: @esxcrows, @ceviety")
     application.run_polling()
 
 
