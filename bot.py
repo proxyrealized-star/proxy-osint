@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8681415760:AAFPFcK8P56CFyxOulWr69I0QLyYGwx-f1s")
-API_URL = "https://num-api-nu.vercel.app/get-info?phone={num}&apikey=boss10m"
+API_URL = "https://paid-sell.vercel.app/api/proxy?type=info&value={}"
 
 # Force join channels
 FORCE_CHANNELS = [
