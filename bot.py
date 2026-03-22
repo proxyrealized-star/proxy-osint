@@ -16,7 +16,7 @@ ADMIN_ID = int(os.environ.get("ADMIN_ID", "8554863978"))
 DEVELOPER_USERNAME = "@proxyfxc"
 API_URL = "https://paid-sell.vercel.app/api/proxy?type=info&value={}"
 RATE_LIMIT = 6
-RESULT_DELETE_SECONDS = 0.8
+RESULT_DELETE_SECONDS = 10
 
 FORCE_CHANNELS = ["@ceviety", "@esxcrows"]
 
