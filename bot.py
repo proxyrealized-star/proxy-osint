@@ -1,23 +1,35 @@
+import os
 import json
 import time
+import asyncio
+import threading
 import requests
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import (
+    Application, 
+    CommandHandler, 
+    ContextTypes,
+    CallbackQueryHandler
+)
 from threading import Lock
 
 # ================= CONFIG =================
-BOT_TOKEN = "8681415760:AAGRB25KwvwHeH9MtOiWh0JGsW3Q22QnWbk"
-API_URL = "https://paid-sell.vercel.app/api/proxy?type=info&value={}"
-ADMIN_ID = 8554863978  # Your admin ID
+# Load from environment variables
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8681415760:AAGRB25KwvwHeH9MtOiWh0JGsW3Q22QnWbk")
+API_URL = os.environ.get("API_URL", "https://paid-sell.vercel.app/api/proxy?type=info&value={}")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "8554863978"))
+RATE_LIMIT_SECONDS = int(os.environ.get("RATE_LIMIT_SECONDS", "7"))
+AUTO_DELETE_SECONDS = int(os.environ.get("AUTO_DELETE_SECONDS", "10"))
+PORT = int(os.environ.get("PORT", "5000"))
 # =========================================
 
 app = Flask(__name__)
+bot_app = None
 
 # Rate limiting storage
 rate_limit = {}
 rate_lock = Lock()
-RATE_LIMIT_SECONDS = 7
 
 # Approved users storage (for personal use)
 approved_users = set()
@@ -32,8 +44,11 @@ def load_approved_users():
 
 def save_approved_users():
     """Save approved users to file"""
-    with open('approved_users.json', 'w') as f:
-        json.dump(list(approved_users), f)
+    try:
+        with open('approved_users.json', 'w') as f:
+            json.dump(list(approved_users), f)
+    except:
+        pass
 
 # Load existing approved users
 approved_users = load_approved_users()
@@ -53,6 +68,14 @@ def validate_phone(phone: str) -> bool:
     """Validate phone number"""
     phone = ''.join(filter(str.isdigit, phone))
     return len(phone) >= 10 and len(phone) <= 15
+
+async def delete_after(message, seconds):
+    """Delete message after specified seconds"""
+    await asyncio.sleep(seconds)
+    try:
+        await message.delete()
+    except:
+        pass
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command handler"""
@@ -83,6 +106,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
+def format_result(data, phone):
+    """Format API result nicely"""
+    try:
+        if isinstance(data, dict):
+            result = f"📱 **Phone Lookup Result**\n"
+            result += f"🔍 **Number:** `{phone}`\n"
+            result += f"{'─' * 30}\n"
+            
+            for key, value in data.items():
+                if value:
+                    result += f"**{key.replace('_', ' ').title()}:** {value}\n"
+            
+            return result
+        elif isinstance(data, list):
+            result = f"📱 **Phone Lookup Result**\n"
+            result += f"🔍 **Number:** `{phone}`\n"
+            result += f"{'─' * 30}\n"
+            result += json.dumps(data, indent=2, ensure_ascii=False)[:3000]
+            return result
+        else:
+            return f"📱 **Result:**\n```json\n{json.dumps(data, indent=2, ensure_ascii=False)[:3000]}\n```"
+    except:
+        return f"📱 **Result:**\n```\n{str(data)[:3000]}\n```"
+
 async def num_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Phone number lookup command"""
     user_id = update.effective_user.id
@@ -97,7 +144,8 @@ async def num_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
         if not is_group:
-            context.application.create_task(delete_after(msg, 10))
+            asyncio.create_task(delete_after(msg, AUTO_DELETE_SECONDS))
+            asyncio.create_task(delete_after(update.message, AUTO_DELETE_SECONDS))
         return
     
     # Check approval for personal chat
@@ -109,8 +157,8 @@ async def num_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✅ You can use this bot in groups freely!",
             parse_mode='Markdown'
         )
-        context.application.create_task(delete_after(msg, 10))
-        context.application.create_task(delete_after(update.message, 10))
+        asyncio.create_task(delete_after(msg, AUTO_DELETE_SECONDS))
+        asyncio.create_task(delete_after(update.message, AUTO_DELETE_SECONDS))
         return
     
     # Rate limiting
@@ -121,8 +169,8 @@ async def num_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
         if not is_group:
-            context.application.create_task(delete_after(msg, 7))
-            context.application.create_task(delete_after(update.message, 7))
+            asyncio.create_task(delete_after(msg, AUTO_DELETE_SECONDS))
+            asyncio.create_task(delete_after(update.message, AUTO_DELETE_SECONDS))
         return
     
     phone = context.args[0]
@@ -136,8 +184,8 @@ async def num_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
         if not is_group:
-            context.application.create_task(delete_after(msg, 10))
-            context.application.create_task(delete_after(update.message, 10))
+            asyncio.create_task(delete_after(msg, AUTO_DELETE_SECONDS))
+            asyncio.create_task(delete_after(update.message, AUTO_DELETE_SECONDS))
         return
     
     # Send processing message
@@ -158,8 +206,8 @@ async def num_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='Markdown'
             )
             if not is_group:
-                context.application.create_task(delete_after(processing_msg, 10))
-                context.application.create_task(delete_after(update.message, 10))
+                asyncio.create_task(delete_after(processing_msg, AUTO_DELETE_SECONDS))
+                asyncio.create_task(delete_after(update.message, AUTO_DELETE_SECONDS))
             return
         
         data = response.json()
@@ -182,49 +230,17 @@ async def num_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Auto-delete in personal chat
         if not is_group:
-            context.application.create_task(delete_after(update.message, 10))
-            context.application.create_task(delete_after(result_msg, 10))
+            asyncio.create_task(delete_after(update.message, AUTO_DELETE_SECONDS))
+            asyncio.create_task(delete_after(result_msg, AUTO_DELETE_SECONDS))
             
     except requests.exceptions.Timeout:
         await processing_msg.edit_text("❌ **Timeout**\n\nAPI request timed out. Please try again.", parse_mode='Markdown')
         if not is_group:
-            context.application.create_task(delete_after(processing_msg, 10))
+            asyncio.create_task(delete_after(processing_msg, AUTO_DELETE_SECONDS))
     except Exception as e:
         await processing_msg.edit_text(f"❌ **Error**\n\n{str(e)}", parse_mode='Markdown')
         if not is_group:
-            context.application.create_task(delete_after(processing_msg, 10))
-
-def format_result(data, phone):
-    """Format API result nicely"""
-    try:
-        if isinstance(data, dict):
-            result = f"📱 **Phone Lookup Result**\n"
-            result += f"🔍 **Number:** `{phone}`\n"
-            result += f"{'─' * 30}\n"
-            
-            for key, value in data.items():
-                if value:
-                    result += f"**{key.replace('_', ' ').title()}:** {value}\n"
-            
-            return result
-        elif isinstance(data, list):
-            result = f"📱 **Phone Lookup Result**\n"
-            result += f"🔍 **Number:** `{phone}`\n"
-            result += f"{'─' * 30}\n"
-            result += json.dumps(data, indent=2, ensure_ascii=False)
-            return result
-        else:
-            return f"📱 **Result:**\n```json\n{json.dumps(data, indent=2, ensure_ascii=False)}\n```"
-    except:
-        return f"📱 **Result:**\n```\n{data}\n```"
-
-async def delete_after(message, seconds):
-    """Delete message after specified seconds"""
-    await asyncio.sleep(seconds)
-    try:
-        await message.delete()
-    except:
-        pass
+            asyncio.create_task(delete_after(processing_msg, AUTO_DELETE_SECONDS))
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Check bot status"""
@@ -302,23 +318,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-# Flask webhook endpoint
+# Flask routes
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Handle webhook updates"""
-    update = Update.de_json(request.get_json(force=True), bot_app.bot)
-    bot_app.update_queue.put_nowait(update)
+    if bot_app:
+        update = Update.de_json(request.get_json(force=True), bot_app.bot)
+        bot_app.update_queue.put_nowait(update)
     return 'OK'
 
 @app.route('/')
 def index():
-    return "Bot is running!"
-
-import asyncio
-import threading
+    return "Bot is running! ✅"
 
 def run_bot():
-    """Run telegram bot in separate thread"""
+    """Run telegram bot"""
     global bot_app
     bot_app = Application.builder().token(BOT_TOKEN).build()
     
@@ -329,6 +343,11 @@ def run_bot():
     bot_app.add_handler(CallbackQueryHandler(button_callback))
     
     # Start bot
+    print("🤖 Bot started successfully!")
+    print(f"👑 Admin ID: {ADMIN_ID}")
+    print(f"⏰ Rate limit: {RATE_LIMIT_SECONDS}s")
+    print(f"🗑️ Auto-delete: {AUTO_DELETE_SECONDS}s")
+    
     bot_app.run_polling()
 
 if __name__ == "__main__":
@@ -337,4 +356,4 @@ if __name__ == "__main__":
     bot_thread.start()
     
     # Run Flask app
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=PORT)
