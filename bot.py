@@ -128,7 +128,7 @@ def join_kb():
     btns = []
     for ch in FORCE_CHANNELS:
         btns.append([InlineKeyboardButton(f"📢 Join {ch}", url=f"https://t.me/{ch[1:]}")])
-    btns.append([InlineKeyboardButton("✅ Verify", callback_data="verify"]))
+    btns.append([InlineKeyboardButton("✅ Verify", callback_data="verify")])
     return InlineKeyboardMarkup(btns)
 
 def contact_kb():
